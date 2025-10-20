@@ -23,18 +23,13 @@ pipeline {
 
         stage("Build Application") {
             steps {
-                // Replace 'register-app' with the folder containing your pom.xml if different
-                dir('register-app') {
-                    sh "mvn clean package"
-                }
+                sh "mvn clean package"
             }
         }
 
         stage("Test Application") {
             steps {
-                dir('register-app') {
-                    sh "mvn test"
-                }
+                sh "mvn test"
             }
         }
     }
