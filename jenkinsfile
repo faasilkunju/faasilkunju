@@ -37,6 +37,12 @@ pipeline {
             }
         }
 
+        stage("Install Forever") {
+            steps {
+                sh 'npm install -g forever'
+            }
+        }
+
         stage("Run Tests") {
             steps { 
                 sh 'npm test' 
@@ -52,15 +58,41 @@ pipeline {
         stage("Start Application") {
             steps {
                 script {
-                    // Make scripts executable and start server
-                    sh 'chmod +x scripts/start_server || echo "Cannot make start_server executable"'
+                    // Fix the start_server script first
+                    sh '''#!/bin/bash
+                        # Create a fixed start_server script
+                        cat > scripts/start_server_fixed << 'EOF'
+#!/bin/bash
+# Start the Node.js application using forever
+echo "Starting Node.js application from: $(pwd)"
+forever start app.js
+echo "Application started with forever"
+EOF
+                        chmod +x scripts/start_server_fixed
+                    '''
+                    
+                    // Make original scripts executable
+                    sh 'chmod +x scripts/start_server || echo "Cannot make original start_server executable"'
                     sh 'ls -la scripts/'
-                    sh './scripts/start_server &'
+                    
+                    // Start server using the fixed script
+                    sh './scripts/start_server_fixed'
                     sh 'sleep 5'  // Give server time to start
                     
                     // Check if server is running
-                    sh 'ps aux | grep node || echo "No node processes found"'
+                    sh 'ps aux | grep node | grep -v grep || echo "No node processes found"'
                     sh 'netstat -tulpn | grep :3000 || echo "Port 3000 not listening"'
+                    sh 'forever list || echo "Forever not available"'
+                }
+            }
+        }
+        
+        stage("Test Application") {
+            steps {
+                script {
+                    // Test if the application is responding
+                    sh 'curl -f http://localhost:3000/ || echo "Application not responding on port 3000"'
+                    sh 'curl http://localhost:3000/ | head -n 5 || echo "Cannot fetch application content"'
                 }
             }
         }
@@ -68,6 +100,11 @@ pipeline {
 
     post {
         always { 
+            script {
+                // Stop the server before cleanup
+                sh 'forever stopall || echo "No forever processes to stop"'
+                sh 'pkill -f "node.*app.js" || echo "No node processes to kill"'
+            }
             echo "Build completed - cleaning workspace"
             cleanWs() 
         }
