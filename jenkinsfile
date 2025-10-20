@@ -1,18 +1,24 @@
 pipeline {
     agent { label 'Jenkins-Agent' }
 
-    tools {
-        nodejs 'NodeJS16'  // Use tools directive instead of environment for tool setup
-    }
-
-    environment {
-        PATH = "${tool 'NodeJS16'}/bin:${env.PATH}"
-    }
-
     stages {
         stage("Cleanup Workspace") {
             steps { 
                 cleanWs() 
+            }
+        }
+
+        stage("Install NodeJS") {
+            steps {
+                script {
+                    // Install NodeJS 16 manually
+                    sh '''
+                        curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
+                        apt-get install -y nodejs
+                        node --version
+                        npm --version
+                    '''
+                }
             }
         }
 
