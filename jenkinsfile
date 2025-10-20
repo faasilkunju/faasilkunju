@@ -2,8 +2,11 @@ pipeline {
     agent { label 'Jenkins-Agent' }
 
     tools {
-        jdk 'Java17'
-        maven 'maven3'
+        nodejs 'NodeJS16' // Make sure this matches the NodeJS installation in Jenkins
+    }
+
+    environment {
+        NODE_ENV = 'production' // Optional: set environment variables if needed
     }
 
     stages {
@@ -21,15 +24,28 @@ pipeline {
             }
         }
 
-        stage("Build Application") {
+        stage("Install Dependencies") {
             steps {
-                sh "mvn clean package"
+                sh 'npm install'
             }
         }
 
-        stage("Test Application") {
+        stage("Run Tests") {
             steps {
-                sh "mvn test"
+                sh 'npm test'
+            }
+        }
+
+        stage("Build Application") {
+            steps {
+                // Only run if your package.json has a "build" script
+                sh 'npm run build || echo "No build script defined"'
+            }
+        }
+
+        stage("Start Application") {
+            steps {
+                sh './scripts/start_server' // Start your Node.js app using your script
             }
         }
     }
@@ -40,7 +56,7 @@ pipeline {
             cleanWs()
         }
         success {
-            echo "Build and Test completed successfully!"
+            echo "Build, Test, and Deployment completed successfully!"
         }
         failure {
             echo "Build or Test failed. Check logs!"
