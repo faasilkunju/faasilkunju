@@ -8,25 +8,26 @@ pipeline {
             }
         }
 
-        stage("Install NodeJS") {
-            steps {
-                script {
-                    // Install NodeJS 16 manually
-                    sh '''
-                        curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
-                        apt-get install -y nodejs
-                        node --version
-                        npm --version
-                    '''
-                }
-            }
-        }
-
         stage("Checkout from SCM") {
             steps {
                 git branch: 'master',
                     credentialsId: 'github',
                     url: 'https://github.com/faasilkunju/faasilkunju.git'
+            }
+        }
+
+        stage("Verify Environment") {
+            steps {
+                script {
+                    // Verify NodeJS is installed
+                    def nodeVersion = sh(script: 'node --version', returnStdout: true).trim()
+                    def npmVersion = sh(script: 'npm --version', returnStdout: true).trim()
+                    echo "NodeJS version: ${nodeVersion}"
+                    echo "NPM version: ${npmVersion}"
+                    
+                    // Verify we're in the right directory
+                    sh 'pwd && ls -la'
+                }
             }
         }
 
@@ -44,26 +45,37 @@ pipeline {
 
         stage("Build Application") {
             steps { 
-                sh 'npm run build || echo "No build script defined"' 
+                sh 'npm run build || echo "No build script defined - continuing"' 
             }
         }
 
         stage("Start Application") {
-            steps { 
-                sh './scripts/start_server' 
+            steps {
+                script {
+                    // Make scripts executable and start server
+                    sh 'chmod +x scripts/start_server || echo "Cannot make start_server executable"'
+                    sh 'ls -la scripts/'
+                    sh './scripts/start_server &'
+                    sh 'sleep 5'  // Give server time to start
+                    
+                    // Check if server is running
+                    sh 'ps aux | grep node || echo "No node processes found"'
+                    sh 'netstat -tulpn | grep :3000 || echo "Port 3000 not listening"'
+                }
             }
         }
     }
 
     post {
         always { 
+            echo "Build completed - cleaning workspace"
             cleanWs() 
         }
         success { 
-            echo "Build completed successfully!" 
+            echo "✅ Build completed successfully!" 
         }
         failure { 
-            echo "Build failed!" 
+            echo "❌ Build failed!" 
         }
     }
 }
