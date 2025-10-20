@@ -10,11 +10,6 @@ pipeline {
                 cleanWs()
             }
         }
-        stage("Checkout from SCM") {
-            steps {
-                checkout scm
-            }
-        }
         stage("Build Application") {
             steps {
                 sh "mvn clean package"
