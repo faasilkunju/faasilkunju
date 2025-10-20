@@ -1,24 +1,54 @@
 pipeline {
     agent { label 'Jenkins-Agent' }
+
     tools {
         jdk 'Java17'
         maven 'maven3'
     }
+
     stages {
         stage("Cleanup Workspace") {
             steps {
                 cleanWs()
             }
         }
-        stage("Build Application") {
+
+        stage("Checkout from SCM") {
             steps {
-                sh "mvn clean package"
+                git branch: 'master',
+                    credentialsId: 'github',
+                    url: 'https://github.com/faasilkunju/faasilkunju.git'
             }
         }
+
+        stage("Build Application") {
+            steps {
+                // Replace 'register-app' with the folder containing your pom.xml if different
+                dir('register-app') {
+                    sh "mvn clean package"
+                }
+            }
+        }
+
         stage("Test Application") {
             steps {
-                sh "mvn test"
+                dir('register-app') {
+                    sh "mvn test"
+                }
             }
+        }
+    }
+
+    post {
+        always {
+            echo "Cleaning workspace after build..."
+            cleanWs()
+        }
+        success {
+            echo "Build and Test completed successfully!"
+        }
+        failure {
+            echo "Build or Test failed. Check logs!"
         }
     }
 }
