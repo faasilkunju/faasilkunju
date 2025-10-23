@@ -1,5 +1,5 @@
 pipeline {
-    agent { label 'test-fazil' }
+    agent any  // CHANGED: Use any available agent instead of specific label
 
     stages {
         stage("Cleanup Workspace") {
@@ -45,7 +45,7 @@ pipeline {
 
         stage("Run Tests") {
             steps { 
-                sh 'npm test' 
+                sh 'PORT=3001 npm test'  // Using port 3001 to avoid Grafana conflict
             }
         }
 
@@ -58,30 +58,13 @@ pipeline {
         stage("Start Application") {
             steps {
                 script {
-                    // Fix the start_server script first
-                    sh '''#!/bin/bash
-                        # Create a fixed start_server script
-                        cat > scripts/start_server_fixed << 'EOF'
-#!/bin/bash
-# Start the Node.js application using forever
-echo "Starting Node.js application from: $(pwd)"
-forever start app.js
-echo "Application started with forever"
-EOF
-                        chmod +x scripts/start_server_fixed
-                    '''
+                    // Start server on port 3001
+                    sh 'PORT=3001 forever start app.js'
+                    sh 'sleep 5'
                     
-                    // Make original scripts executable
-                    sh 'chmod +x scripts/start_server || echo "Cannot make original start_server executable"'
-                    sh 'ls -la scripts/'
-                    
-                    // Start server using the fixed script
-                    sh './scripts/start_server_fixed'
-                    sh 'sleep 5'  // Give server time to start
-                    
-                    // Check if server is running
+                    // Check if server is running on port 3001
                     sh 'ps aux | grep node | grep -v grep || echo "No node processes found"'
-                    sh 'netstat -tulpn | grep :3000 || echo "Port 3000 not listening"'
+                    sh 'netstat -tulpn | grep :3001 || echo "Port 3001 not listening"'
                     sh 'forever list || echo "Forever not available"'
                 }
             }
@@ -90,9 +73,12 @@ EOF
         stage("Test Application") {
             steps {
                 script {
-                    // Test if the application is responding
-                    sh 'curl -f http://localhost:3000/ || echo "Application not responding on port 3000"'
-                    sh 'curl http://localhost:3000/ | head -n 5 || echo "Cannot fetch application content"'
+                    // Test if the application is responding on port 3001
+                    sh 'curl -f http://localhost:3001/ || echo "Application not responding on port 3001"'
+                    sh 'curl http://localhost:3001/ | head -n 5 || echo "Cannot fetch application content"'
+                    
+                    // Stop the server after testing
+                    sh 'forever stopall'
                 }
             }
         }
