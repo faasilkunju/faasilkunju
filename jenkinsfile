@@ -1,5 +1,5 @@
 pipeline {
-    agent any  // CHANGED: Use any available agent instead of specific label
+    agent { label 'test-fazil' }
 
     stages {
         stage("Cleanup Workspace") {
