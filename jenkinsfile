@@ -55,6 +55,16 @@ pipeline {
             }
         }
 
+        stage("SonarQube Analysis") {
+            steps {
+                script {
+                    withSonarQubeEnv(credentialsId: 'Sonarqube') { 
+                        sh "mvn sonar:sonar"
+                    }
+                }	
+            }
+        }
+
         stage("Start Application") {
             steps {
                 script {
