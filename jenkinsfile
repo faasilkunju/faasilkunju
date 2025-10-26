@@ -16,6 +16,49 @@ pipeline {
             }
         }
 
+        stage("Check Tools Availability") {
+            steps {
+                script {
+                    echo "🔍 Checking available tools on the agent..."
+                    
+                    // Check if Maven is installed
+                    def mavenInstalled = false
+                    try {
+                        def mavenVersion = sh(script: 'mvn --version', returnStdout: true).trim()
+                        echo "✅ Maven is installed: ${mavenVersion}"
+                        mavenInstalled = true
+                    } catch (Exception e) {
+                        echo "❌ Maven is NOT installed"
+                    }
+                    
+                    // Check if SonarScanner is installed
+                    def sonarScannerInstalled = false
+                    try {
+                        def scannerVersion = sh(script: 'sonar-scanner --version', returnStdout: true).trim()
+                        echo "✅ SonarScanner is installed: ${scannerVersion}"
+                        sonarScannerInstalled = true
+                    } catch (Exception e) {
+                        echo "❌ SonarScanner is NOT installed"
+                    }
+                    
+                    // Store the results for later stages
+                    env.MAVEN_AVAILABLE = mavenInstalled.toString()
+                    env.SONARSCANNER_AVAILABLE = sonarScannerInstalled.toString()
+                    
+                    // Diagnostic info
+                    sh '''
+                        echo "=== Tool Locations ==="
+                        which mvn || echo "mvn: not found"
+                        which sonar-scanner || echo "sonar-scanner: not found"
+                        which npm || echo "npm: not found"
+                        which node || echo "node: not found"
+                        echo "=== Java Info ==="
+                        java -version 2>&1 | head -3 || echo "java: not found"
+                    '''
+                }
+            }
+        }
+
         stage("Verify Environment") {
             steps {
                 script {
@@ -45,7 +88,7 @@ pipeline {
 
         stage("Run Tests") {
             steps { 
-                sh 'PORT=3001 npm test'  // Using port 3001 to avoid Grafana conflict
+                sh 'PORT=3001 npm test'
             }
         }
 
@@ -58,8 +101,30 @@ pipeline {
         stage("SonarQube Analysis") {
             steps {
                 script {
-                    withSonarQubeEnv(credentialsId: 'Sonarqube') { 
-                        sh "mvn sonar:sonar"
+                    echo "MAVEN_AVAILABLE: ${env.MAVEN_AVAILABLE}"
+                    echo "SONARSCANNER_AVAILABLE: ${env.SONARSCANNER_AVAILABLE}"
+                    
+                    if (env.MAVEN_AVAILABLE == 'true') {
+                        echo "🚀 Using Maven for SonarQube analysis..."
+                        withSonarQubeEnv(credentialsId: 'Sonarqube') { 
+                            sh "mvn sonar:sonar"
+                        }
+                    } else if (env.SONARSCANNER_AVAILABLE == 'true') {
+                        echo "🚀 Using SonarScanner for analysis..."
+                        withSonarQubeEnv(credentialsId: 'Sonarqube') { 
+                            sh """
+                                sonar-scanner \
+                                -Dsonar.projectKey=register-app \
+                                -Dsonar.sources=. \
+                                -Dsonar.host.url=\$SONAR_HOST_URL \
+                                -Dsonar.login=\$SONAR_AUTH_TOKEN \
+                                -Dsonar.coverage.exclusions=**/node_modules/**,**/tests/** \
+                                -Dsonar.exclusions=**/node_modules/**,**/.*/**
+                            """
+                        }
+                    } else {
+                        echo "⚠️ No SonarQube analysis tool available. Skipping SonarQube analysis."
+                        echo "To enable SonarQube analysis, install either Maven or SonarScanner on the agent."
                     }
                 }	
             }
