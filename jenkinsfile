@@ -23,6 +23,19 @@ pipeline {
             }
         }
 
+        stage("Install Buildah") {
+            steps {
+                script {
+                    sh '''
+                        echo "Installing Buildah..."
+                        dnf install -y buildah
+                        echo "Buildah installation completed"
+                        buildah --version
+                    '''
+                }
+            }
+        }
+
         stage("Setup Environment") {
             steps {
                 script {
@@ -33,11 +46,9 @@ pipeline {
                         
                         echo "=== Verifying Tools ==="
                         java -version
-                        mvn --version || echo "Maven not working - but continuing"
                         node --version
                         npm --version
-                        podman --version
-                        buildah --version || echo "Buildah not installed"
+                        buildah --version
                     '''
                 }
             }
@@ -99,9 +110,6 @@ pipeline {
                                 echo "SonarScanner is already installed"
                             fi
                             
-                            echo "SonarScanner version:"
-                            sonar-scanner --version
-                            
                             echo "Starting SonarQube analysis..."
                             sonar-scanner -Dsonar.projectKey=register-app -Dsonar.sources=. -Dsonar.host.url=$SONAR_HOST_URL -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.coverage.exclusions=**/node_modules/**,**/tests/** -Dsonar.exclusions=**/node_modules/**,**/.*/** -Dsonar.projectName="Register App" -Dsonar.projectVersion=1.0
                         '''
@@ -118,29 +126,11 @@ pipeline {
             }
         }
 
-        stage("Test Docker Credentials") {
-            steps {
-                script {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'dockerhub',
-                        usernameVariable: 'DOCKER_USER',
-                        passwordVariable: 'DOCKER_PASS'
-                    )]) {
-                        sh '''
-                            echo "Testing Docker Hub credentials..."
-                            podman login -u $DOCKER_USER -p $DOCKER_PASS docker.io
-                            echo "Docker Hub login successful!"
-                        '''
-                    }
-                }
-            }
-        }
-
-        stage("Build & Push Container Image") {
+        stage("Build & Push Container Image with Buildah") {
             steps {
                 script {
                     if (fileExists('Dockerfile')) {
-                        echo "Building and pushing container image..."
+                        echo "Building and pushing container image using Buildah..."
                         
                         withCredentials([usernamePassword(
                             credentialsId: 'dockerhub',
@@ -148,22 +138,20 @@ pipeline {
                             passwordVariable: 'DOCKER_PASS'
                         )]) {
                             sh """
-                                rm -f /root/.docker/config.json
-                                rm -f /run/user/0/containers/auth.json
-                                
-                                podman login -u '$DOCKER_USER' -p '$DOCKER_PASS' docker.io
-                                
+                                # Build the image with Buildah
                                 echo "Building image: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
-                                podman build -t docker.io/${IMAGE_NAME}:${IMAGE_TAG} .
+                                buildah bud --format=docker -t docker.io/${IMAGE_NAME}:${IMAGE_TAG} .
                                 
+                                # Push with explicit credentials
                                 echo "Pushing version tag: ${IMAGE_TAG}"
-                                podman push docker.io/${IMAGE_NAME}:${IMAGE_TAG}
+                                buildah push --creds '$DOCKER_USER:$DOCKER_PASS' docker.io/${IMAGE_NAME}:${IMAGE_TAG} docker://docker.io/${IMAGE_NAME}:${IMAGE_TAG}
                                 
-                                podman login -u '$DOCKER_USER' -p '$DOCKER_PASS' docker.io
+                                # Tag and push as latest
+                                echo "Tagging as latest"
+                                buildah tag docker.io/${IMAGE_NAME}:${IMAGE_TAG} docker.io/${IMAGE_NAME}:latest
                                 
-                                podman tag docker.io/${IMAGE_NAME}:${IMAGE_TAG} docker.io/${IMAGE_NAME}:latest
                                 echo "Pushing latest tag"
-                                podman push docker.io/${IMAGE_NAME}:latest
+                                buildah push --creds '$DOCKER_USER:$DOCKER_PASS' docker.io/${IMAGE_NAME}:latest docker://docker.io/${IMAGE_NAME}:latest
                                 
                                 echo "All container images pushed successfully to Docker Hub"
                             """
@@ -186,9 +174,8 @@ pipeline {
                     )]) {
                         sh '''
                             echo "Verifying images were pushed successfully..."
-                            podman login -u $DOCKER_USER -p $DOCKER_PASS docker.io
-                            podman pull docker.io/${IMAGE_NAME}:${IMAGE_TAG}
-                            podman pull docker.io/${IMAGE_NAME}:latest
+                            buildah pull --creds '$DOCKER_USER:$DOCKER_PASS' docker://docker.io/${IMAGE_NAME}:${IMAGE_TAG}
+                            buildah pull --creds '$DOCKER_USER:$DOCKER_PASS' docker://docker.io/${IMAGE_NAME}:latest
                             echo "Images verified and can be pulled successfully"
                         '''
                     }
@@ -218,9 +205,9 @@ pipeline {
                     if (fileExists('Dockerfile')) {
                         echo "Cleaning up container artifacts..."
                         sh """
-                            podman rmi docker.io/${IMAGE_NAME}:${IMAGE_TAG} || echo "Version image not found"
-                            podman rmi docker.io/${IMAGE_NAME}:latest || echo "Latest image not found"
-                            podman system prune -f || echo "No pruning needed"
+                            buildah rmi docker.io/${IMAGE_NAME}:${IMAGE_TAG} || echo "Version image not found"
+                            buildah rmi docker.io/${IMAGE_NAME}:latest || echo "Latest image not found"
+                            buildah containers --all || echo "No containers to list"
                         """
                         echo "Container artifacts cleaned up"
                     } else {
@@ -272,7 +259,6 @@ pipeline {
                 echo "Stopping application..."
                 sh 'forever stopall || echo "No forever processes to stop"'
                 sh 'pkill -f "node.*app.js" || echo "No node processes to kill"'
-                sh 'podman system prune -f || echo "No podman cleanup needed"'
             }
             echo "Build process completed - cleaning workspace"
             cleanWs() 
