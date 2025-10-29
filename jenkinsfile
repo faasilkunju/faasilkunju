@@ -155,6 +155,47 @@ pipeline {
             }
         }
 
+        stage("Trivy Scan") {
+            steps {
+                script {
+                    // Check if Docker image exists locally before scanning
+                    if (fileExists('Dockerfile')) {
+                        echo "🔍 Running Trivy security scan..."
+                        sh '''
+                            docker run -v /var/run/docker.sock:/var/run/docker.sock \
+                                aquasec/trivy image ${IMAGE_NAME}:latest \
+                                --no-progress \
+                                --scanners vuln \
+                                --exit-code 0 \
+                                --severity HIGH,CRITICAL \
+                                --format table
+                        '''
+                        echo "✅ Trivy security scan completed"
+                    } else {
+                        echo "⚠️ No Docker image available - skipping Trivy scan"
+                    }
+                }
+            }
+        }
+
+        stage("Cleanup Artifacts") {
+            steps {
+                script {
+                    // Clean up Docker images if they exist
+                    if (fileExists('Dockerfile')) {
+                        echo "🧹 Cleaning up Docker artifacts..."
+                        sh """
+                            docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || echo "Image ${IMAGE_NAME}:${IMAGE_TAG} not found"
+                            docker rmi ${IMAGE_NAME}:latest || echo "Image ${IMAGE_NAME}:latest not found"
+                        """
+                        echo "✅ Docker artifacts cleaned up"
+                    } else {
+                        echo "⚠️ No Docker artifacts to clean up"
+                    }
+                }
+            }
+        }
+
         stage("Start Application") {
             steps {
                 script {
