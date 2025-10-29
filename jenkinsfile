@@ -135,13 +135,21 @@ pipeline {
         stage("Build & Push Docker Image") {
             steps {
                 script {
-                    docker.withRegistry('', DOCKER_PASS) {
-                        docker_image = docker.build "${IMAGE_NAME}"
-                    }
+                    // Check if Dockerfile exists
+                    if (fileExists('Dockerfile')) {
+                        echo "🚀 Building Docker image..."
+                        docker.withRegistry('', DOCKER_PASS) {
+                            docker_image = docker.build "${IMAGE_NAME}"
+                        }
 
-                    docker.withRegistry('', DOCKER_PASS) {
-                        docker_image.push("${IMAGE_TAG}")
-                        docker_image.push('latest')
+                        docker.withRegistry('', DOCKER_PASS) {
+                            docker_image.push("${IMAGE_TAG}")
+                            docker_image.push('latest')
+                        }
+                        echo "✅ Docker image built and pushed successfully"
+                    } else {
+                        echo "⚠️ No Dockerfile found - skipping Docker build stage"
+                        echo "To enable Docker builds, add a Dockerfile to your project root"
                     }
                 }
             }
