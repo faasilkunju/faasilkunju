@@ -38,6 +38,7 @@ pipeline {
                         mvn --version || echo "Maven not working - but continuing"
                         node --version
                         npm --version
+                        podman --version
                     '''
                 }
             }
@@ -130,7 +131,7 @@ pipeline {
             }
         }
 
-        stage("Test Docker Credentials") {
+        stage("Test Podman Credentials") {
             steps {
                 script {
                     withCredentials([usernamePassword(
@@ -139,20 +140,20 @@ pipeline {
                         passwordVariable: 'DOCKER_PASS'
                     )]) {
                         sh '''
-                            echo "Testing Docker login..."
-                            docker login -u $DOCKER_USER -p $DOCKER_PASS
-                            echo "✅ Docker login successful!"
+                            echo "Testing Podman login..."
+                            podman login -u $DOCKER_USER -p $DOCKER_PASS docker.io
+                            echo "✅ Podman login successful!"
                         '''
                     }
                 }
             }
         }
 
-        stage("Build & Push Docker Image") {
+        stage("Build & Push Container Image") {
             steps {
                 script {
                     if (fileExists('Dockerfile')) {
-                        echo "🚀 Building Docker image..."
+                        echo "🚀 Building container image with Podman..."
                         
                         withCredentials([usernamePassword(
                             credentialsId: 'dockerhub',
@@ -160,15 +161,35 @@ pipeline {
                             passwordVariable: 'DOCKER_PASS'
                         )]) {
                             sh """
-                                docker login -u $DOCKER_USER -p $DOCKER_PASS
-                                docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -t ${IMAGE_NAME}:latest .
-                                docker push ${IMAGE_NAME}:${IMAGE_TAG}
-                                docker push ${IMAGE_NAME}:latest
+                                # Ensure we're logged in
+                                podman login -u $DOCKER_USER -p $DOCKER_PASS docker.io
+                                
+                                # Verify we're in the right directory with Dockerfile
+                                echo "Current directory:"
+                                pwd
+                                echo "Dockerfile contents:"
+                                ls -la Dockerfile
+                                
+                                # Build the image
+                                echo "Building image: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
+                                podman build -t docker.io/${IMAGE_NAME}:${IMAGE_TAG} .
+                                
+                                # Tag as latest
+                                podman tag docker.io/${IMAGE_NAME}:${IMAGE_TAG} docker.io/${IMAGE_NAME}:latest
+                                
+                                # Push both tags
+                                echo "Pushing version tag..."
+                                podman push docker.io/${IMAGE_NAME}:${IMAGE_TAG}
+                                
+                                echo "Pushing latest tag..."
+                                podman push docker.io/${IMAGE_NAME}:latest
+                                
+                                echo "✅ Container images pushed successfully to Docker Hub"
                             """
                         }
-                        echo "✅ Docker image built and pushed successfully"
                     } else {
-                        echo "⚠️ No Dockerfile found - skipping Docker build stage"
+                        echo "⚠️ No Dockerfile found - skipping container build stage"
+                        sh 'pwd && ls -la'
                     }
                 }
             }
@@ -180,8 +201,8 @@ pipeline {
                     if (fileExists('Dockerfile')) {
                         echo "🔍 Running Trivy security scan..."
                         sh """
-                            docker run -v /var/run/docker.sock:/var/run/docker.sock \\
-                                aquasec/trivy image ${IMAGE_NAME}:latest \\
+                            podman run --security-opt label=disable \\
+                                aquasec/trivy image docker.io/${IMAGE_NAME}:latest \\
                                 --no-progress \\
                                 --scanners vuln \\
                                 --exit-code 0 \\
@@ -190,7 +211,7 @@ pipeline {
                         """
                         echo "✅ Trivy security scan completed"
                     } else {
-                        echo "⚠️ No Docker image available - skipping Trivy scan"
+                        echo "⚠️ No container image available - skipping Trivy scan"
                     }
                 }
             }
@@ -200,14 +221,14 @@ pipeline {
             steps {
                 script {
                     if (fileExists('Dockerfile')) {
-                        echo "🧹 Cleaning up Docker artifacts..."
+                        echo "🧹 Cleaning up container artifacts..."
                         sh """
-                            docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || echo "Image ${IMAGE_NAME}:${IMAGE_TAG} not found"
-                            docker rmi ${IMAGE_NAME}:latest || echo "Image ${IMAGE_NAME}:latest not found"
+                            podman rmi docker.io/${IMAGE_NAME}:${IMAGE_TAG} || echo "Version image not found"
+                            podman rmi docker.io/${IMAGE_NAME}:latest || echo "Latest image not found"
                         """
-                        echo "✅ Docker artifacts cleaned up"
+                        echo "✅ Container artifacts cleaned up"
                     } else {
-                        echo "⚠️ No Docker artifacts to clean up"
+                        echo "⚠️ No container artifacts to clean up"
                     }
                 }
             }
