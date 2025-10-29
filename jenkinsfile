@@ -39,6 +39,7 @@ pipeline {
                         node --version
                         npm --version
                         podman --version
+                        buildah --version || echo "Buildah not installed"
                     '''
                 }
             }
@@ -131,7 +132,7 @@ pipeline {
             }
         }
 
-        stage("Test Podman Credentials") {
+        stage("Test Docker Credentials") {
             steps {
                 script {
                     withCredentials([usernamePassword(
@@ -140,9 +141,9 @@ pipeline {
                         passwordVariable: 'DOCKER_PASS'
                     )]) {
                         sh '''
-                            echo "Testing Podman login..."
+                            echo "Testing Docker Hub credentials..."
                             podman login -u $DOCKER_USER -p $DOCKER_PASS docker.io
-                            echo "✅ Podman login successful!"
+                            echo "✅ Docker Hub login successful!"
                         '''
                     }
                 }
@@ -153,7 +154,7 @@ pipeline {
             steps {
                 script {
                     if (fileExists('Dockerfile')) {
-                        echo "🚀 Building container image with Podman..."
+                        echo "🚀 Building and pushing container image..."
                         
                         withCredentials([usernamePassword(
                             credentialsId: 'dockerhub',
@@ -161,30 +162,30 @@ pipeline {
                             passwordVariable: 'DOCKER_PASS'
                         )]) {
                             sh """
-                                # Ensure we're logged in
-                                podman login -u $DOCKER_USER -p $DOCKER_PASS docker.io
+                                # Clean up any existing auth issues
+                                rm -f /root/.docker/config.json
+                                rm -f /run/user/0/containers/auth.json
                                 
-                                # Verify we're in the right directory with Dockerfile
-                                echo "Current directory:"
-                                pwd
-                                echo "Dockerfile contents:"
-                                ls -la Dockerfile
+                                # Login to Docker Hub
+                                podman login -u '$DOCKER_USER' -p '$DOCKER_PASS' docker.io
                                 
                                 # Build the image
                                 echo "Building image: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
                                 podman build -t docker.io/${IMAGE_NAME}:${IMAGE_TAG} .
                                 
-                                # Tag as latest
-                                podman tag docker.io/${IMAGE_NAME}:${IMAGE_TAG} docker.io/${IMAGE_NAME}:latest
-                                
-                                # Push both tags
-                                echo "Pushing version tag..."
+                                # Push the version tag first
+                                echo "Pushing version tag: ${IMAGE_TAG}"
                                 podman push docker.io/${IMAGE_NAME}:${IMAGE_TAG}
                                 
-                                echo "Pushing latest tag..."
+                                # Fresh login for the second push to avoid token issues
+                                podman login -u '$DOCKER_USER' -p '$DOCKER_PASS' docker.io
+                                
+                                # Tag and push as latest
+                                podman tag docker.io/${IMAGE_NAME}:${IMAGE_TAG} docker.io/${IMAGE_NAME}:latest
+                                echo "Pushing latest tag"
                                 podman push docker.io/${IMAGE_NAME}:latest
                                 
-                                echo "✅ Container images pushed successfully to Docker Hub"
+                                echo "✅ All container images pushed successfully to Docker Hub"
                             """
                         }
                     } else {
@@ -195,7 +196,27 @@ pipeline {
             }
         }
 
-        stage("Trivy Scan") {
+        stage("Verify Push Success") {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        sh '''
+                            echo "Verifying images were pushed successfully..."
+                            podman login -u $DOCKER_USER -p $DOCKER_PASS docker.io
+                            podman pull docker.io/${IMAGE_NAME}:${IMAGE_TAG}
+                            podman pull docker.io/${IMAGE_NAME}:latest
+                            echo "✅ Images verified and can be pulled successfully"
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage("Trivy Security Scan") {
             steps {
                 script {
                     if (fileExists('Dockerfile')) {
@@ -223,8 +244,12 @@ pipeline {
                     if (fileExists('Dockerfile')) {
                         echo "🧹 Cleaning up container artifacts..."
                         sh """
+                            # Remove local images to free up space
                             podman rmi docker.io/${IMAGE_NAME}:${IMAGE_TAG} || echo "Version image not found"
                             podman rmi docker.io/${IMAGE_NAME}:latest || echo "Latest image not found"
+                            
+                            # Clean up containers and cache
+                            podman system prune -f || echo "No pruning needed"
                         """
                         echo "✅ Container artifacts cleaned up"
                     } else {
@@ -237,14 +262,22 @@ pipeline {
         stage("Start Application") {
             steps {
                 script {
+                    echo "🚀 Starting application..."
+                    // Stop any existing instances first
+                    sh 'forever stopall || echo "No previous instances running"'
+                    sh 'pkill -f "node.*app.js" || echo "No node processes to kill"'
+                    
                     // Start server on port 3001
                     sh 'PORT=3001 forever start app.js'
-                    sh 'sleep 5'
+                    sh 'sleep 10'  # Increased sleep time for app to start
                     
-                    // Check if server is running on port 3001
-                    sh 'ps aux | grep node | grep -v grep || echo "No node processes found"'
-                    sh 'netstat -tulpn | grep :3001 || echo "Port 3001 not listening"'
-                    sh 'forever list || echo "Forever not available"'
+                    // Check if server is running
+                    sh '''
+                        echo "=== Checking application status ==="
+                        ps aux | grep node | grep -v grep || echo "No node processes found"
+                        netstat -tulpn | grep :3001 || echo "Port 3001 not listening"
+                        forever list || echo "Forever not available"
+                    '''
                 }
             }
         }
@@ -252,12 +285,15 @@ pipeline {
         stage("Test Application") {
             steps {
                 script {
-                    // Test if the application is responding on port 3001
-                    sh 'curl -f http://localhost:3001/ || echo "Application not responding on port 3001"'
-                    sh 'curl http://localhost:3001/ | head -n 5 || echo "Cannot fetch application content"'
-                    
-                    // Stop the server after testing
-                    sh 'forever stopall'
+                    echo "🧪 Testing application..."
+                    // Test if the application is responding
+                    sh '''
+                        echo "Testing application endpoint..."
+                        curl -f http://localhost:3001/ && echo "✅ Application is responding" || echo "❌ Application not responding on port 3001"
+                        
+                        echo "Testing application content..."
+                        curl -s http://localhost:3001/ | head -n 5 || echo "Cannot fetch application content"
+                    '''
                 }
             }
         }
@@ -266,18 +302,36 @@ pipeline {
     post {
         always { 
             script {
-                // Stop the server before cleanup
+                echo "🛑 Stopping application..."
                 sh 'forever stopall || echo "No forever processes to stop"'
                 sh 'pkill -f "node.*app.js" || echo "No node processes to kill"'
+                
+                echo "🧹 Final cleanup..."
+                sh 'podman system prune -f || echo "No podman cleanup needed"'
             }
-            echo "Build completed - cleaning workspace"
+            echo "Build process completed - cleaning workspace"
             cleanWs() 
         }
         success { 
-            echo "✅ Build completed successfully!" 
+            echo "🎉 ✅ Build completed successfully!" 
+            script {
+                sh '''
+                    echo "=== Build Summary ==="
+                    echo "Docker Image: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
+                    echo "Docker Image: docker.io/${IMAGE_NAME}:latest"
+                    echo "Build Number: ${BUILD_NUMBER}"
+                '''
+            }
         }
         failure { 
-            echo "❌ Build failed!" 
+            echo "💥 ❌ Build failed!" 
+            script {
+                sh '''
+                    echo "=== Troubleshooting Info ==="
+                    echo "Check Docker Hub: https://hub.docker.com/r/fazilkunju/register-app-pipeline"
+                    echo "Check Jenkins logs for detailed error information"
+                '''
+            }
         }
     }
 }
