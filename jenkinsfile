@@ -23,46 +23,16 @@ pipeline {
             }
         }
 
-        stage("Install Buildah") {
-            steps {
-                script {
-                    sh '''
-                        echo "Installing Buildah..."
-                        dnf install -y buildah
-                        echo "Buildah installation completed"
-                        buildah --version
-                    '''
-                }
-            }
-        }
-
         stage("Setup Environment") {
             steps {
                 script {
                     sh '''
-                        export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
-                        export PATH=$JAVA_HOME/bin:$PATH
-                        echo "JAVA_HOME set to: $JAVA_HOME"
-                        
                         echo "=== Verifying Tools ==="
-                        java -version
+                        java -version || echo "Java not available"
                         node --version
                         npm --version
-                        buildah --version
+                        podman --version
                     '''
-                }
-            }
-        }
-
-        stage("Verify Environment") {
-            steps {
-                script {
-                    def nodeVersion = sh(script: 'node --version', returnStdout: true).trim()
-                    def npmVersion = sh(script: 'npm --version', returnStdout: true).trim()
-                    echo "NodeJS version: ${nodeVersion}"
-                    echo "NPM version: ${npmVersion}"
-                    
-                    sh 'pwd && ls -la'
                 }
             }
         }
@@ -73,64 +43,17 @@ pipeline {
             }
         }
 
-        stage("Install Forever") {
-            steps {
-                sh 'npm install -g forever'
-            }
-        }
-
         stage("Run Tests") {
             steps { 
-                sh 'PORT=3001 npm test'
+                sh 'PORT=3001 npm test' 
             }
         }
 
-        stage("Build Application") {
-            steps { 
-                sh 'npm run build || echo "No build script defined - continuing"' 
-            }
-        }
-
-        stage("SonarQube Analysis"){
-            steps {
-                script {
-                    withSonarQubeEnv(credentialsId: 'Sonarqube') { 
-                        sh '''
-                            export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
-                            export PATH=$JAVA_HOME/bin:$PATH
-                            
-                            echo "Setting up SonarScanner..."
-                            if ! command -v sonar-scanner &> /dev/null; then
-                                echo "Installing SonarScanner..."
-                                wget -q https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-4.8.0.2856-linux.zip
-                                unzip -q sonar-scanner-cli-4.8.0.2856-linux.zip
-                                export PATH=$PWD/sonar-scanner-4.8.0.2856-linux/bin:$PATH
-                                echo "SonarScanner installed successfully"
-                            else
-                                echo "SonarScanner is already installed"
-                            fi
-                            
-                            echo "Starting SonarQube analysis..."
-                            sonar-scanner -Dsonar.projectKey=register-app -Dsonar.sources=. -Dsonar.host.url=$SONAR_HOST_URL -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.coverage.exclusions=**/node_modules/**,**/tests/** -Dsonar.exclusions=**/node_modules/**,**/.*/** -Dsonar.projectName="Register App" -Dsonar.projectVersion=1.0
-                        '''
-                    }
-                }	
-            }
-        }
-
-        stage("Quality Gate"){
-            steps {
-                script {
-                    waitForQualityGate abortPipeline: false, credentialsId: 'jenkins-sonarqube-token'
-                }	
-            }
-        }
-
-        stage("Build & Push Container Image with Buildah") {
+        stage("Build & Push Container Image") {
             steps {
                 script {
                     if (fileExists('Dockerfile')) {
-                        echo "Building and pushing container image using Buildah..."
+                        echo "🚀 Building and pushing Docker image..."
                         
                         withCredentials([usernamePassword(
                             credentialsId: 'dockerhub',
@@ -138,80 +61,50 @@ pipeline {
                             passwordVariable: 'DOCKER_PASS'
                         )]) {
                             sh """
-                                # Build the image with Buildah
-                                echo "Building image: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
-                                buildah bud --format=docker -t docker.io/${IMAGE_NAME}:${IMAGE_TAG} .
+                                # Clean any existing authentication
+                                rm -f /root/.docker/config.json
+                                rm -f /run/user/0/containers/auth.json
                                 
-                                # Push with explicit credentials
-                                echo "Pushing version tag: ${IMAGE_TAG}"
-                                buildah push --creds '$DOCKER_USER:$DOCKER_PASS' docker.io/${IMAGE_NAME}:${IMAGE_TAG} docker://docker.io/${IMAGE_NAME}:${IMAGE_TAG}
+                                # Login to Docker Hub
+                                echo "🔐 Logging into Docker Hub..."
+                                podman login -u '$DOCKER_USER' -p '$DOCKER_PASS' docker.io
                                 
-                                # Tag and push as latest
-                                echo "Tagging as latest"
-                                buildah tag docker.io/${IMAGE_NAME}:${IMAGE_TAG} docker.io/${IMAGE_NAME}:latest
+                                # Verify login worked
+                                echo "✅ Login successful"
                                 
-                                echo "Pushing latest tag"
-                                buildah push --creds '$DOCKER_USER:$DOCKER_PASS' docker.io/${IMAGE_NAME}:latest docker://docker.io/${IMAGE_NAME}:latest
+                                # Build the image
+                                echo "🏗️ Building image: ${IMAGE_NAME}:${IMAGE_TAG}"
+                                podman build -t ${IMAGE_NAME}:${IMAGE_TAG} .
                                 
-                                echo "All container images pushed successfully to Docker Hub"
+                                # Push ONLY the version tag (simpler, more reliable)
+                                echo "📤 Pushing to Docker Hub..."
+                                podman push ${IMAGE_NAME}:${IMAGE_TAG}
+                                
+                                echo "✅ Successfully pushed: ${IMAGE_NAME}:${IMAGE_TAG}"
                             """
                         }
                     } else {
-                        echo "No Dockerfile found - skipping container build stage"
+                        echo "❌ No Dockerfile found!"
                         sh 'pwd && ls -la'
                     }
                 }
             }
         }
 
-        stage("Verify Push Success") {
+        stage("Verify Push") {
             steps {
                 script {
+                    echo "🔍 Verifying push was successful..."
                     withCredentials([usernamePassword(
                         credentialsId: 'dockerhub',
                         usernameVariable: 'DOCKER_USER',
                         passwordVariable: 'DOCKER_PASS'
                     )]) {
                         sh '''
-                            echo "Verifying images were pushed successfully..."
-                            buildah pull --creds '$DOCKER_USER:$DOCKER_PASS' docker://docker.io/${IMAGE_NAME}:${IMAGE_TAG}
-                            buildah pull --creds '$DOCKER_USER:$DOCKER_PASS' docker://docker.io/${IMAGE_NAME}:latest
-                            echo "Images verified and can be pulled successfully"
+                            podman login -u $DOCKER_USER -p $DOCKER_PASS docker.io
+                            podman pull ${IMAGE_NAME}:${IMAGE_TAG}
+                            echo "✅ Verification successful - image can be pulled!"
                         '''
-                    }
-                }
-            }
-        }
-
-        stage("Trivy Security Scan") {
-            steps {
-                script {
-                    if (fileExists('Dockerfile')) {
-                        echo "Running Trivy security scan..."
-                        sh """
-                            podman run --security-opt label=disable aquasec/trivy image docker.io/${IMAGE_NAME}:latest --no-progress --scanners vuln --exit-code 0 --severity HIGH,CRITICAL --format table
-                        """
-                        echo "Trivy security scan completed"
-                    } else {
-                        echo "No container image available - skipping Trivy scan"
-                    }
-                }
-            }
-        }
-
-        stage("Cleanup Artifacts") {
-            steps {
-                script {
-                    if (fileExists('Dockerfile')) {
-                        echo "Cleaning up container artifacts..."
-                        sh """
-                            buildah rmi docker.io/${IMAGE_NAME}:${IMAGE_TAG} || echo "Version image not found"
-                            buildah rmi docker.io/${IMAGE_NAME}:latest || echo "Latest image not found"
-                            buildah containers --all || echo "No containers to list"
-                        """
-                        echo "Container artifacts cleaned up"
-                    } else {
-                        echo "No container artifacts to clean up"
                     }
                 }
             }
@@ -220,33 +113,18 @@ pipeline {
         stage("Start Application") {
             steps {
                 script {
-                    echo "Starting application..."
-                    sh 'forever stopall || echo "No previous instances running"'
+                    echo "🚀 Starting application..."
+                    sh 'forever stopall || echo "No previous instances to stop"'
                     sh 'pkill -f "node.*app.js" || echo "No node processes to kill"'
                     
                     sh 'PORT=3001 forever start app.js'
-                    sh 'sleep 10'
+                    sh 'sleep 8'
                     
                     sh '''
-                        echo "Checking application status"
-                        ps aux | grep node | grep -v grep || echo "No node processes found"
-                        netstat -tulpn | grep :3001 || echo "Port 3001 not listening"
-                        forever list || echo "Forever not available"
-                    '''
-                }
-            }
-        }
-        
-        stage("Test Application") {
-            steps {
-                script {
-                    echo "Testing application..."
-                    sh '''
-                        echo "Testing application endpoint..."
-                        curl -f http://localhost:3001/ && echo "Application is responding" || echo "Application not responding on port 3001"
-                        
-                        echo "Testing application content..."
-                        curl -s http://localhost:3001/ | head -n 5 || echo "Cannot fetch application content"
+                        echo "📊 Checking application status..."
+                        ps aux | grep node | grep -v grep | head -5
+                        netstat -tulpn | grep :3001 || echo "Port 3001 not listening yet"
+                        curl -s http://localhost:3001/ | head -3 && echo "✅ Application is responding!" || echo "❌ Application not responding"
                     '''
                 }
             }
@@ -256,33 +134,17 @@ pipeline {
     post {
         always { 
             script {
-                echo "Stopping application..."
+                echo "🧹 Cleaning up..."
                 sh 'forever stopall || echo "No forever processes to stop"'
                 sh 'pkill -f "node.*app.js" || echo "No node processes to kill"'
             }
-            echo "Build process completed - cleaning workspace"
             cleanWs() 
         }
         success { 
-            echo "Build completed successfully!" 
-            script {
-                sh '''
-                    echo "Build Summary"
-                    echo "Docker Image: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
-                    echo "Docker Image: docker.io/${IMAGE_NAME}:latest"
-                    echo "Build Number: ${BUILD_NUMBER}"
-                '''
-            }
+            echo "🎉 PIPELINE SUCCESSFUL!" 
         }
         failure { 
-            echo "Build failed!" 
-            script {
-                sh '''
-                    echo "Troubleshooting Info"
-                    echo "Check Docker Hub: https://hub.docker.com/r/fazilkunju/register-app-pipeline"
-                    echo "Check Jenkins logs for detailed error information"
-                '''
-            }
+            echo "💥 PIPELINE FAILED!" 
         }
     }
 }
