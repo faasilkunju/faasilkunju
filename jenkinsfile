@@ -68,13 +68,13 @@ pipeline {
                             # Login to Docker Hub
                             podman login -u '$DOCKER_USER' -p '$DOCKER_PASS' docker.io
                             
-                            # Build the image with unique repository name
-                            podman build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                            # Build the image with FULL registry path
+                            podman build -t docker.io/${IMAGE_NAME}:${IMAGE_TAG} .
                             
                             # Push to the new repository
-                            podman push ${IMAGE_NAME}:${IMAGE_TAG}
+                            podman push docker.io/${IMAGE_NAME}:${IMAGE_TAG}
                             
-                            echo "✅ Successfully pushed: ${IMAGE_NAME}:${IMAGE_TAG}"
+                            echo "✅ Successfully pushed: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
                             echo "📦 Image available at: https://hub.docker.com/r/fazilkunju/${APP_NAME}"
                         """
                     }
@@ -93,7 +93,8 @@ pipeline {
                     )]) {
                         sh '''
                             podman login -u $DOCKER_USER -p $DOCKER_PASS docker.io
-                            podman pull ${IMAGE_NAME}:${IMAGE_TAG}
+                            # Use FULL registry path for pulling
+                            podman pull docker.io/${IMAGE_NAME}:${IMAGE_TAG}
                             echo "✅ Verification successful - image can be pulled!"
                         '''
                     }
@@ -136,7 +137,7 @@ pipeline {
             script {
                 sh '''
                     echo "📦 Build Artifacts:"
-                    echo "Docker Image: ${IMAGE_NAME}:${IMAGE_TAG}"
+                    echo "Docker Image: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
                     echo "Docker Hub URL: https://hub.docker.com/r/fazilkunju/${APP_NAME}"
                 '''
             }
