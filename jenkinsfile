@@ -23,6 +23,18 @@ pipeline {
             }
         }
 
+        stage("Install Skopeo") {
+            steps {
+                script {
+                    sh '''
+                        echo "Installing Skopeo..."
+                        dnf install -y skopeo
+                        skopeo --version
+                    '''
+                }
+            }
+        }
+
         stage("Setup Environment") {
             steps {
                 script {
@@ -32,6 +44,7 @@ pipeline {
                         node --version
                         npm --version
                         podman --version
+                        skopeo --version
                     '''
                 }
             }
@@ -53,7 +66,7 @@ pipeline {
             steps {
                 script {
                     if (fileExists('Dockerfile')) {
-                        echo "🚀 Building and pushing Docker image..."
+                        echo "🚀 Building and pushing Docker image using Skopeo..."
                         
                         withCredentials([usernamePassword(
                             credentialsId: 'docker',
@@ -61,21 +74,15 @@ pipeline {
                             passwordVariable: 'DOCKER_PASS'
                         )]) {
                             sh """
-                                # Clean any existing authentication
-                                rm -f /root/.docker/config.json
-                                rm -f /run/user/0/containers/auth.json
+                                # Build with Podman using local tag
+                                echo "🏗️ Building image..."
+                                podman build -t local-register-app:${IMAGE_TAG} .
                                 
-                                # Login to Docker Hub
-                                echo "🔐 Logging into Docker Hub..."
-                                podman login -u '$DOCKER_USER' -p '$DOCKER_PASS' docker.io
-                                
-                                # Build the image with FULL registry path (IMPORTANT!)
-                                echo "🏗️ Building image: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
-                                podman build -t docker.io/${IMAGE_NAME}:${IMAGE_TAG} .
-                                
-                                # Push with FULL registry path
-                                echo "📤 Pushing to Docker Hub..."
-                                podman push docker.io/${IMAGE_NAME}:${IMAGE_TAG}
+                                # Push using Skopeo (better authentication handling)
+                                echo "📤 Pushing to Docker Hub using Skopeo..."
+                                skopeo copy --dest-creds '$DOCKER_USER:$DOCKER_PASS' \\
+                                    containers-storage:localhost/local-register-app:${IMAGE_TAG} \\
+                                    docker://docker.io/${IMAGE_NAME}:${IMAGE_TAG}
                                 
                                 echo "✅ Successfully pushed: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
                             """
@@ -134,6 +141,7 @@ pipeline {
                 echo "🧹 Cleaning up..."
                 sh 'forever stopall || echo "No forever processes to stop"'
                 sh 'pkill -f "node.*app.js" || echo "No node processes to kill"'
+                sh 'podman rmi local-register-app:${IMAGE_TAG} || echo "Local image not found"'
             }
             cleanWs() 
         }
