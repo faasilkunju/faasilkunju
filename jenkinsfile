@@ -69,18 +69,15 @@ pipeline {
                                 echo "🔐 Logging into Docker Hub..."
                                 podman login -u '$DOCKER_USER' -p '$DOCKER_PASS' docker.io
                                 
-                                # Verify login worked
-                                echo "✅ Login successful"
+                                # Build the image with FULL registry path (IMPORTANT!)
+                                echo "🏗️ Building image: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
+                                podman build -t docker.io/${IMAGE_NAME}:${IMAGE_TAG} .
                                 
-                                # Build the image
-                                echo "🏗️ Building image: ${IMAGE_NAME}:${IMAGE_TAG}"
-                                podman build -t ${IMAGE_NAME}:${IMAGE_TAG} .
-                                
-                                # Push ONLY the version tag (simpler, more reliable)
+                                # Push with FULL registry path
                                 echo "📤 Pushing to Docker Hub..."
-                                podman push ${IMAGE_NAME}:${IMAGE_TAG}
+                                podman push docker.io/${IMAGE_NAME}:${IMAGE_TAG}
                                 
-                                echo "✅ Successfully pushed: ${IMAGE_NAME}:${IMAGE_TAG}"
+                                echo "✅ Successfully pushed: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
                             """
                         }
                     } else {
@@ -102,7 +99,7 @@ pipeline {
                     )]) {
                         sh '''
                             podman login -u $DOCKER_USER -p $DOCKER_PASS docker.io
-                            podman pull ${IMAGE_NAME}:${IMAGE_TAG}
+                            podman pull docker.io/${IMAGE_NAME}:${IMAGE_TAG}
                             echo "✅ Verification successful - image can be pulled!"
                         '''
                     }
