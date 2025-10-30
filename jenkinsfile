@@ -2,10 +2,10 @@ pipeline {
     agent { label 'test-fazil' }
     
     environment {
-        APP_NAME = "register-app-pipeline"
+        APP_NAME = "register-app-build-${BUILD_NUMBER}"  // Unique name per build
         RELEASE = "1.0.0"
         IMAGE_NAME = "fazilkunju/${APP_NAME}"
-        IMAGE_TAG = "${RELEASE}-${BUILD_NUMBER}"
+        IMAGE_TAG = "latest"
     }
 
     stages {
@@ -23,18 +23,6 @@ pipeline {
             }
         }
 
-        stage("Install Skopeo") {
-            steps {
-                script {
-                    sh '''
-                        echo "Installing Skopeo..."
-                        dnf install -y skopeo
-                        skopeo --version
-                    '''
-                }
-            }
-        }
-
         stage("Setup Environment") {
             steps {
                 script {
@@ -44,7 +32,6 @@ pipeline {
                         node --version
                         npm --version
                         podman --version
-                        skopeo --version
                     '''
                 }
             }
@@ -65,31 +52,31 @@ pipeline {
         stage("Build & Push Container Image") {
             steps {
                 script {
-                    if (fileExists('Dockerfile')) {
-                        echo "🚀 Building and pushing Docker image using Skopeo..."
-                        
-                        withCredentials([usernamePassword(
-                            credentialsId: 'docker',
-                            usernameVariable: 'DOCKER_USER',
-                            passwordVariable: 'DOCKER_PASS'
-                        )]) {
-                            sh """
-                                # Build with Podman using local tag
-                                echo "🏗️ Building image..."
-                                podman build -t local-register-app:${IMAGE_TAG} .
-                                
-                                # Push using Skopeo (better authentication handling)
-                                echo "📤 Pushing to Docker Hub using Skopeo..."
-                                skopeo copy --dest-creds '$DOCKER_USER:$DOCKER_PASS' \\
-                                    containers-storage:localhost/local-register-app:${IMAGE_TAG} \\
-                                    docker://docker.io/${IMAGE_NAME}:${IMAGE_TAG}
-                                
-                                echo "✅ Successfully pushed: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
-                            """
-                        }
-                    } else {
-                        echo "❌ No Dockerfile found!"
-                        sh 'pwd && ls -la'
+                    echo "🚀 Building and pushing to NEW repository: ${IMAGE_NAME}"
+                    
+                    withCredentials([usernamePassword(
+                        credentialsId: 'docker',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        sh """
+                            # Clean cache and auth
+                            podman system prune -f
+                            rm -f /root/.docker/config.json
+                            rm -f /run/user/0/containers/auth.json
+                            
+                            # Login to Docker Hub
+                            podman login -u '$DOCKER_USER' -p '$DOCKER_PASS' docker.io
+                            
+                            # Build the image with unique repository name
+                            podman build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                            
+                            # Push to the new repository
+                            podman push ${IMAGE_NAME}:${IMAGE_TAG}
+                            
+                            echo "✅ Successfully pushed: ${IMAGE_NAME}:${IMAGE_TAG}"
+                            echo "📦 Image available at: https://hub.docker.com/r/fazilkunju/${APP_NAME}"
+                        """
                     }
                 }
             }
@@ -106,7 +93,7 @@ pipeline {
                     )]) {
                         sh '''
                             podman login -u $DOCKER_USER -p $DOCKER_PASS docker.io
-                            podman pull docker.io/${IMAGE_NAME}:${IMAGE_TAG}
+                            podman pull ${IMAGE_NAME}:${IMAGE_TAG}
                             echo "✅ Verification successful - image can be pulled!"
                         '''
                     }
@@ -141,12 +128,18 @@ pipeline {
                 echo "🧹 Cleaning up..."
                 sh 'forever stopall || echo "No forever processes to stop"'
                 sh 'pkill -f "node.*app.js" || echo "No node processes to kill"'
-                sh 'podman rmi local-register-app:${IMAGE_TAG} || echo "Local image not found"'
             }
             cleanWs() 
         }
         success { 
             echo "🎉 PIPELINE SUCCESSFUL!" 
+            script {
+                sh '''
+                    echo "📦 Build Artifacts:"
+                    echo "Docker Image: ${IMAGE_NAME}:${IMAGE_TAG}"
+                    echo "Docker Hub URL: https://hub.docker.com/r/fazilkunju/${APP_NAME}"
+                '''
+            }
         }
         failure { 
             echo "💥 PIPELINE FAILED!" 
