@@ -2,7 +2,7 @@ pipeline {
     agent { label 'test-fazil' }
     
     environment {
-        APP_NAME = "register-app-build-${BUILD_NUMBER}"  // Unique name per build
+        APP_NAME = "register-app-build-${BUILD_NUMBER}"
         RELEASE = "1.0.0"
         IMAGE_NAME = "fazilkunju/${APP_NAME}"
         IMAGE_TAG = "latest"
@@ -136,7 +136,6 @@ pipeline {
                     )]) {
                         sh '''
                             podman login -u $DOCKER_USER -p $DOCKER_PASS docker.io
-                            # Use FULL registry path for pulling
                             podman pull docker.io/${IMAGE_NAME}:${IMAGE_TAG}
                             echo "✅ Verification successful - image can be pulled!"
                         '''
@@ -173,8 +172,6 @@ pipeline {
         always { 
             script {
                 echo "🧹 Cleaning up workspace..."
-                # Note: We DON'T stop the application in production
-                # Only clean workspace, keep the application running
             }
             cleanWs() 
         }
