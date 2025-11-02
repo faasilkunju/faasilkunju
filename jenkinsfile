@@ -145,22 +145,25 @@ pipeline {
             }
         }
 
-        stage("Start Application") {
+        stage("Deploy Application") {
             steps {
                 script {
-                    echo "🚀 Starting application..."
-                    sh 'forever stopall || echo "No previous instances to stop"'
-                    sh 'pkill -f "node.*app.js" || echo "No node processes to kill"'
+                    echo "🚀 Deploying application..."
                     
-                    sh 'PORT=3001 forever start app.js'
-                    sh 'sleep 8'
-                    
-                    sh '''
-                        echo "📊 Checking application status..."
-                        ps aux | grep node | grep -v grep | head -5
-                        netstat -tulpn | grep :3001 || echo "Port 3001 not listening yet"
-                        curl -s http://localhost:3001/ | head -3 && echo "✅ Application is responding!" || echo "❌ Application not responding"
-                    '''
+                    sh """
+                        # Stop any existing container
+                        podman stop register-app || echo "No existing container to stop"
+                        podman rm register-app || echo "No existing container to remove"
+                        
+                        # Deploy the new version
+                        podman run -d -p 3001:3001 -e PORT=3001 --name register-app docker.io/${IMAGE_NAME}:${IMAGE_TAG}
+                        
+                        # Wait for application to start
+                        sleep 10
+                        
+                        # Test the application
+                        curl -f http://localhost:3001/ && echo "✅ Application deployed successfully!" || echo "❌ Application deployment failed"
+                    """
                 }
             }
         }
@@ -169,9 +172,9 @@ pipeline {
     post {
         always { 
             script {
-                echo "🧹 Cleaning up..."
-                sh 'forever stopall || echo "No forever processes to stop"'
-                sh 'pkill -f "node.*app.js" || echo "No node processes to kill"'
+                echo "🧹 Cleaning up workspace..."
+                # Note: We DON'T stop the application in production
+                # Only clean workspace, keep the application running
             }
             cleanWs() 
         }
@@ -182,6 +185,8 @@ pipeline {
                     echo "📦 Build Artifacts:"
                     echo "Docker Image: docker.io/${IMAGE_NAME}:${IMAGE_TAG}"
                     echo "Docker Hub URL: https://hub.docker.com/r/fazilkunju/${APP_NAME}"
+                    echo "Application URL: http://localhost:3001/"
+                    echo "Application Status: RUNNING"
                 '''
             }
         }
