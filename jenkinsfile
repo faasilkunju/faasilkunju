@@ -32,7 +32,6 @@ pipeline {
                         node --version
                         npm --version
                         podman --version
-                        sonar-scanner --version || echo "SonarScanner not available"
                     '''
                 }
             }
@@ -57,6 +56,17 @@ pipeline {
                         sh '''
                             export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
                             export PATH=$JAVA_HOME/bin:$PATH
+                            
+                            echo "Setting up SonarScanner..."
+                            if ! command -v sonar-scanner &> /dev/null; then
+                                echo "Installing SonarScanner..."
+                                wget -q https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-4.8.0.2856-linux.zip
+                                unzip -q sonar-scanner-cli-4.8.0.2856-linux.zip
+                                export PATH=$PWD/sonar-scanner-4.8.0.2856-linux/bin:$PATH
+                                echo "SonarScanner installed successfully"
+                            else
+                                echo "SonarScanner is already installed"
+                            fi
                             
                             echo "Starting SonarQube analysis..."
                             sonar-scanner \\
